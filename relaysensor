@@ -1,0 +1,146 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <LiquidCrystal_I2C.h>
+
+// ============ KONFIGURASI WIFI DAN MQTT ============
+const char* ssid = "anjay";
+const char* password = "mumetlek";
+const char* mqtt_server = "broker.emqx.io";
+
+// Topic MQTT
+const char* TOPIC_JSON    = "kel4/dht";       // menerima data suhu dan status
+const char* TOPIC_CTRL_R1 = "kel4/relay1";    // kirim perintah relay1
+const char* TOPIC_CTRL_R2 = "kel4/relay2";    // kirim perintah relay2
+
+// ============ OBJEK DAN VARIABEL ============
+WiFiClient espClient;
+PubSubClient mqtt(espClient);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+float temperature = 0;
+String relay1Status = "OFF";
+String relay2Status = "OFF";
+
+#define TOUCH1 4   // pin touch sensor untuk relay1
+#define TOUCH2 15  // pin touch sensor untuk relay2
+
+unsigned long lastTouch1 = 0;
+unsigned long lastTouch2 = 0;
+const unsigned long debounceDelay = 400; // mencegah double sentuhan
+
+// ============ WIFI ============
+void setup_wifi() {
+  Serial.print("Menghubungkan ke ");
+  Serial.println(ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Terhubung!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+// ============ CALLBACK MQTT ============
+void callback(char* topic, byte* payload, unsigned int length) {
+  payload[length] = '\0';
+  String msg = String((char*)payload);
+
+  if (strcmp(topic, TOPIC_JSON) == 0) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, msg);
+    if (!error) {
+      temperature = doc["temperature"];
+      relay1Status = (const char*)doc["relay1"];
+      relay2Status = (const char*)doc["relay2"];
+
+      Serial.printf("Temp: %.1f°C | R1:%s | R2:%s\n",
+                    temperature, relay1Status.c_str(), relay2Status.c_str());
+
+      lcd.setCursor(0, 0);
+      lcd.print("                ");
+      lcd.setCursor(0, 0);
+      lcd.print("Suhu: ");
+      lcd.print(temperature, 1);
+      lcd.print((char)223);
+      lcd.print("C");
+
+      lcd.setCursor(0, 1);
+      lcd.print("                ");
+      lcd.setCursor(0, 1);
+      lcd.print("R1:");
+      lcd.print(relay1Status);
+      lcd.print(" R2:");
+      lcd.print(relay2Status);
+    }
+  }
+}
+
+// ============ RECONNECT MQTT ============
+void reconnect() {
+  while (!mqtt.connected()) {
+    Serial.print("Menghubungkan MQTT...");
+    String clientId = "ESP32_LCDKel4_";
+    clientId += String(random(0xffff), HEX);
+    if (mqtt.connect(clientId.c_str())) {
+      Serial.println("Terhubung ke broker!");
+      mqtt.subscribe(TOPIC_JSON);
+    } else {
+      Serial.print("Gagal, rc=");
+      Serial.print(mqtt.state());
+      Serial.println(" coba lagi dalam 5 detik...");
+      delay(5000);
+    }
+  }
+}
+
+// ============ SETUP ============
+void setup() {
+  Serial.begin(115200);
+  lcd.init();
+  lcd.backlight();
+  lcd.print("LCD Subscriber");
+  delay(1000);
+  lcd.clear();
+
+  pinMode(TOUCH1, INPUT);
+  pinMode(TOUCH2, INPUT);
+
+  setup_wifi();
+  mqtt.setServer(mqtt_server, 1883);
+  mqtt.setCallback(callback);
+}
+
+// ============ LOOP ============
+void loop() {
+  if (!mqtt.connected()) reconnect();
+  mqtt.loop();
+
+  // ==== Touch Sensor 1 ====
+  if (touchRead(TOUCH1) < 30 && millis() - lastTouch1 > debounceDelay) {
+    lastTouch1 = millis();
+    if (relay1Status == "ON") {
+      mqtt.publish(TOPIC_CTRL_R1, "0");
+      Serial.println("Relay 1 OFF dikirim");
+    } else {
+      mqtt.publish(TOPIC_CTRL_R1, "1");
+      Serial.println("Relay 1 ON dikirim");
+    }
+  }
+
+  // ==== Touch Sensor 2 ====
+  if (touchRead(TOUCH2) < 30 && millis() - lastTouch2 > debounceDelay) {
+    lastTouch2 = millis();
+    if (relay2Status == "ON") {
+      mqtt.publish(TOPIC_CTRL_R2, "0");
+      Serial.println("Relay 2 OFF dikirim");
+    } else {
+      mqtt.publish(TOPIC_CTRL_R2, "1");
+      Serial.println("Relay 2 ON dikirim");
+    }
+  }
+}
