@@ -1,0 +1,204 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ModbusIP_ESP8266.h>
+#include "DHT.h"
+
+// ==================== KONFIGURASI PIN ====================
+#define DHTPIN 14
+#define DHTTYPE DHT11
+#define RELAY1_PIN 25
+#define RELAY2_PIN 26
+#define TOUCH1_PIN 15  // Touch sensor 1 (T7)
+#define TOUCH2_PIN 27   // Touch sensor 2 (T0)
+
+// ==================== ALAMAT MODBUS ====================
+#define TEMPERATURE_ADDRESS 100
+#define HUMIDITY_ADDRESS 101
+#define RELAY1_Coil 1
+#define RELAY2_Coil 2
+#define TOUCH1_Coil 3
+#define TOUCH2_Coil 4
+
+// ==================== KONFIGURASI WIFI ====================
+const char* ssid = "Suci";
+const char* pass = "22222222";
+
+// ==================== KONFIGURASI MQTT ====================
+const char* mqtt_server = "broker.emqx.io";  // bisa diganti broker kamu sendiri
+const int mqtt_port = 1883;
+const char* mqtt_user = "";  // kosong jika tidak pakai autentikasi
+const char* mqtt_pass = "";
+
+const char* topic_publish = "esp32/sensor";     // kirim data
+const char* topic_subscribe = "esp32/control";  // menerima perintah relay
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// ==================== OBJEK DAN VARIABEL ====================
+DHT dht(DHTPIN, DHTTYPE);
+ModbusIP mb;
+
+int touchThreshold = 500;
+bool lastTouch1 = false;
+bool lastTouch2 = false;
+unsigned long lastTouchTime1 = 0;
+unsigned long lastTouchTime2 = 0;
+const unsigned long debounceDelay = 300;
+unsigned long lastMsg = 0;
+
+// ==================== FUNGSI MQTT ====================
+void reconnectMQTT() {
+  while (!client.connected()) {
+    Serial.print("Menghubungkan ke MQTT...");
+    if (client.connect("ESP32_Modbus_Client", mqtt_user, mqtt_pass)) {
+      Serial.println("terhubung!");
+      client.subscribe(topic_subscribe);
+    } else {
+      Serial.print("gagal, rc=");
+      Serial.print(client.state());
+      Serial.println(" coba lagi dalam 5 detik");
+      delay(5000);
+    }
+  }
+}
+
+// Callback untuk menerima pesan dari MQTT
+void callback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (int i = 0; i < length; i++) message += (char)payload[i];
+  Serial.print("Pesan MQTT diterima [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  Serial.println(message);
+
+  if (String(topic) == topic_subscribe) {
+    if (message == "relay1_on") mb.Coil(RELAY1_Coil, true);
+    else if (message == "relay1_off") mb.Coil(RELAY1_Coil, false);
+    else if (message == "relay2_on") mb.Coil(RELAY2_Coil, true);
+    else if (message == "relay2_off") mb.Coil(RELAY2_Coil, false);
+  }
+}
+
+// ==================== SETUP ====================
+void setup() {
+  Serial.begin(115200);
+  Serial.println(F("MODBUS + MQTT + TOUCH SENSOR"));
+
+  // WiFi setup
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Terhubung!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // MQTT setup
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+
+  // Inisialisasi DHT
+  dht.begin();
+
+  // Relay setup
+  pinMode(RELAY1_PIN, OUTPUT);
+  pinMode(RELAY2_PIN, OUTPUT);
+  digitalWrite(RELAY1_PIN, HIGH);
+  digitalWrite(RELAY2_PIN, HIGH);
+
+  // Modbus setup
+  mb.server();
+  mb.addHreg(TEMPERATURE_ADDRESS);
+  mb.addHreg(HUMIDITY_ADDRESS);
+  mb.addCoil(RELAY1_Coil);
+  mb.addCoil(RELAY2_Coil);
+  mb.addCoil(TOUCH1_Coil);
+  mb.addCoil(TOUCH2_Coil);
+
+  mb.Coil(RELAY1_Coil, false);
+  mb.Coil(RELAY2_Coil, false);
+  mb.Coil(TOUCH1_Coil, false);
+  mb.Coil(TOUCH2_Coil, false);
+}
+
+// ==================== LOOP ====================
+void loop() {
+  mb.task();
+
+  if (!client.connected()) reconnectMQTT();
+  client.loop();
+
+  float humidity = dht.readHumidity();
+  float temperature = dht.readTemperature();
+  if (!isnan(humidity) && !isnan(temperature)) {
+    mb.Hreg(TEMPERATURE_ADDRESS, temperature * 10);
+    mb.Hreg(HUMIDITY_ADDRESS, humidity * 10);
+  }
+
+  // === SENSOR SENTUH 1 ===
+  int touchValue1 = touchRead(TOUCH1_PIN);
+  if (touchValue1 < touchThreshold && millis() - lastTouchTime1 > debounceDelay) {
+    lastTouchTime1 = millis();
+    mb.Coil(TOUCH1_Coil, 1);
+    if (!lastTouch1) {
+      bool currentState = mb.Coil(RELAY1_Coil);
+      mb.Coil(RELAY1_Coil, !currentState);
+      lastTouch1 = true;
+    }
+  } else if (touchValue1 >= touchThreshold) {
+    mb.Coil(TOUCH1_Coil, 0);
+    lastTouch1 = false;
+  }
+
+  // === SENSOR SENTUH 2 ===
+  int touchValue2 = touchRead(TOUCH2_PIN);
+  if (touchValue2 < touchThreshold && millis() - lastTouchTime2 > debounceDelay) {
+    lastTouchTime2 = millis();
+    mb.Coil(TOUCH2_Coil, 1);
+    if (!lastTouch2) {
+      bool currentState = mb.Coil(RELAY2_Coil);
+      mb.Coil(RELAY2_Coil, !currentState);
+      lastTouch2 = true;
+    }
+  } else if (touchValue2 >= touchThreshold) {
+    mb.Coil(TOUCH2_Coil, 0);
+    lastTouch2 = false;
+  }
+
+  // === UPDATE KONDISI RELAY SESUAI COIL ===
+  digitalWrite(RELAY1_PIN, mb.Coil(RELAY1_Coil) ? LOW : HIGH);
+  digitalWrite(RELAY2_PIN, mb.Coil(RELAY2_Coil) ? LOW : HIGH);
+
+  // === KIRIM DATA KE MQTT SETIAP 2 DETIK ===
+  unsigned long now = millis();
+  if (now - lastMsg > 2000) {
+    lastMsg = now;
+
+    String payload = "{";
+    payload += "\"temperature\":" + String(temperature, 1) + ",";
+    payload += "\"humidity\":" + String(humidity, 1) + ",";
+    payload += "\"relay1\":" + String(mb.Coil(RELAY1_Coil)) + ",";
+    payload += "\"relay2\":" + String(mb.Coil(RELAY2_Coil)) + ",";
+    payload += "\"touch1\":" + String(mb.Coil(TOUCH1_Coil)) + ",";
+    payload += "\"touch2\":" + String(mb.Coil(TOUCH2_Coil));
+    payload += "}";
+
+    client.publish(topic_publish, payload.c_str());
+    Serial.print("Data MQTT Dikirim: ");
+    Serial.println(payload);
+  }
+
+  // === DEBUG SERIAL ===
+  Serial.println("======================================");
+  Serial.print("Suhu       : "); Serial.print(temperature); Serial.println(" °C");
+  Serial.print("Kelembapan : "); Serial.print(humidity); Serial.println(" %");
+  Serial.print("Relay 1    : "); Serial.println(mb.Coil(RELAY1_Coil) ? "ON" : "OFF");
+  Serial.print("Relay 2    : "); Serial.println(mb.Coil(RELAY2_Coil) ? "ON" : "OFF");
+  Serial.print("Touch 1    : "); Serial.println(mb.Coil(TOUCH1_Coil) ? "SENTUH" : "TIDAK");
+  Serial.print("Touch 2    : "); Serial.println(mb.Coil(TOUCH2_Coil) ? "SENTUH" : "TIDAK");
+  Serial.println("======================================\n");
+
+  delay(500);
+}
