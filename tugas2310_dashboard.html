@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Monitoring pH & TDS</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@bernii/gauge.js"></script>
+  <style>
+    body {
+      font-family: "Poppins", sans-serif;
+      background: #f5f7fa;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    .container {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      flex-wrap: wrap;
+    }
+    .card {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      width: 340px;
+      text-align: center;
+    }
+    .value {
+      font-size: 3em;
+      font-weight: bold;
+      color: #007bff;
+    }
+    canvas {
+      margin-top: 20px;
+    }
+    .status {
+      text-align: center;
+      margin-top: 20px;
+      font-weight: bold;
+      color: green;
+    }
+  </style>
+</head>
+<body>
+  <h1>🌱 Dashboard Monitoring pH & TDS</h1>
+
+  <div class="container">
+    <div class="card">
+      <h2>Sensor pH</h2>
+      <canvas id="phGauge" width="250" height="150"></canvas>
+      <div class="value" id="phValue">--</div>
+      <canvas id="phChart" height="150"></canvas>
+    </div>
+    <div class="card">
+      <h2>Sensor TDS</h2>
+      <canvas id="tdsGauge" width="250" height="150"></canvas>
+      <div class="value" id="tdsValue">--</div>
+      <canvas id="tdsChart" height="150"></canvas>
+    </div>
+  </div>
+
+  <div class="status" id="statusText">🔄 Menghubungkan ke broker...</div>
+
+  <script>
+    // === MQTT setup ===
+    const broker = "wss://broker.emqx.io:8084/mqtt";
+    const clientId = "dashboard-" + Math.random().toString(16).substr(2, 8);
+    const client = mqtt.connect(broker, { clientId });
+    const topics = ["esp32/ph", "esp32/tds"];
+
+    // === Chart.js setup ===
+    const phData = [];
+    const tdsData = [];
+    const labels = [];
+
+    const phChart = new Chart(document.getElementById("phChart"), {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "pH",
+            data: phData,
+            borderColor: "#007bff",
+            tension: 0.3,
+          },
+        ],
+      },
+      options: { scales: { y: { beginAtZero: true, max: 14 } } },
+    });
+
+    const tdsChart = new Chart(document.getElementById("tdsChart"), {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "TDS (ppm)",
+            data: tdsData,
+            borderColor: "#28a745",
+            tension: 0.3,
+          },
+        ],
+      },
+      options: { scales: { y: { beginAtZero: true, max: 2000 } } },
+    });
+
+    // === Gauge setup ===
+    const phGaugeOpts = {
+      angle: -0.2,
+      lineWidth: 0.2,
+      radiusScale: 0.9,
+      pointer: { length: 0.6, strokeWidth: 0.035, color: "#000" },
+      limitMax: false,
+      limitMin: false,
+      colorStart: "#6FADCF",
+      colorStop: "#8FC0DA",
+      strokeColor: "#E0E0E0",
+      highDpiSupport: true,
+      staticZones: [
+        { strokeStyle: "#ff0000", min: 0, max: 4 },
+        { strokeStyle: "#00ff00", min: 5.5, max: 7.5 },
+        { strokeStyle: "#ff0000", min: 8, max: 14 },
+      ],
+    };
+
+    const tdsGaugeOpts = {
+      angle: -0.2,
+      lineWidth: 0.2,
+      radiusScale: 0.9,
+      pointer: { length: 0.6, strokeWidth: 0.035, color: "#000" },
+      colorStart: "#6FADCF",
+      colorStop: "#8FC0DA",
+      strokeColor: "#E0E0E0",
+      highDpiSupport: true,
+      staticZones: [
+        { strokeStyle: "#00ff00", min: 0, max: 500 },
+        { strokeStyle: "#ffff00", min: 500, max: 1000 },
+        { strokeStyle: "#ff0000", min: 1000, max: 2000 },
+      ],
+    };
+
+    const phGauge = new Gauge(document.getElementById("phGauge")).setOptions(phGaugeOpts);
+    phGauge.maxValue = 14;
+    phGauge.setMinValue(0);
+    phGauge.animationSpeed = 32;
+
+    const tdsGauge = new Gauge(document.getElementById("tdsGauge")).setOptions(tdsGaugeOpts);
+    tdsGauge.maxValue = 2000;
+    tdsGauge.setMinValue(0);
+    tdsGauge.animationSpeed = 32;
+
+    // === MQTT Event Handling ===
+    client.on("connect", () => {
+      document.getElementById("statusText").textContent = "✅ Terhubung ke broker.emqx.io";
+      topics.forEach((topic) => client.subscribe(topic));
+      console.log("Terhubung ke broker dan subscribe ke:", topics);
+    });
+
+    client.on("message", (topic, message) => {
+      const value = parseFloat(message.toString());
+      const now = new Date().toLocaleTimeString();
+
+      if (topic === "esp32/ph") {
+        document.getElementById("phValue").textContent = value.toFixed(2);
+        phGauge.set(value);
+        phData.push(value);
+        if (phData.length > 20) phData.shift();
+      }
+
+      if (topic === "esp32/tds") {
+        document.getElementById("tdsValue").textContent = value.toFixed(2);
+        tdsGauge.set(value);
+        tdsData.push(value);
+        if (tdsData.length > 20) tdsData.shift();
+      }
+
+      if (labels.length > 20) labels.shift();
+      labels.push(now);
+
+      phChart.update();
+      tdsChart.update();
+    });
+
+    client.on("error", (err) => {
+      document.getElementById("statusText").textContent = "❌ Koneksi gagal.";
+      console.error("Koneksi gagal:", err);
+    });
+  </script>
+</body>
+</html>
