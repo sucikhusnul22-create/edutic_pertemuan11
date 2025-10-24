@@ -1,0 +1,157 @@
+#define BLYNK_TEMPLATE_ID "TMPL6DgpTm2Qu"
+#define BLYNK_TEMPLATE_NAME "Relay5"
+#define BLYNK_AUTH_TOKEN "rqWJzL0LKsAWrYTGDYSXK9ETiKjINChG"
+
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include "DHT.h"
+
+// ==================== KONFIGURASI WIFI ====================
+char ssid[] = "Suci";
+char pass[] = "22222222";
+
+// ==================== KONFIGURASI SENSOR ====================
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define TRIG_PIN 12
+#define ECHO_PIN 14
+#define RELAY 5
+#define PhSensorPin 34
+#define TdsSensorPin 35
+#define VREF 3.3
+#define ADC_RES 4095.0
+
+// ==================== OBJEK DAN VARIABEL ====================
+DHT dht(DHTPIN, DHTTYPE);
+int modeControl = 0;        // 0 = auto, 1 = manual
+int relayState = HIGH;
+
+float suhu, kelembapan, jarak;
+float ph, tds, voltage;
+unsigned long int avgval;
+int temp;
+
+// ==================== FUNGSI BACA JARAK ====================
+float bacaJarakCM() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long durasi = pulseIn(ECHO_PIN, HIGH);
+  return durasi * 0.0343 / 2;
+}
+
+// ==================== SETUP ====================
+void setup() {
+  Serial.begin(9600);
+  dht.begin();
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(RELAY, OUTPUT);
+  digitalWrite(RELAY, relayState);
+
+  Serial.println("Menghubungkan ke WiFi...");
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  Serial.println("WiFi Tersambung!");
+}
+
+// ==================== LOOP ====================
+void loop() {
+  Blynk.run();
+
+  // ==== BACA SENSOR ====
+  suhu = dht.readTemperature();
+  kelembapan = dht.readHumidity();
+  jarak = bacaJarakCM();
+
+  // === SENSOR PH ===
+  int ph_buffer[34];
+  for (int i = 0; i < 34; i++) {
+    ph_buffer[i] = analogRead(PhSensorPin);
+    delay(5);
+  }
+  for (int i = 0; i < 33; i++) {
+    for (int j = i + 1; j < 34; j++) {
+      if (ph_buffer[i] > ph_buffer[j]) {
+        temp = ph_buffer[i];
+        ph_buffer[i] = ph_buffer[j];
+        ph_buffer[j] = temp;
+      }
+    }
+  }
+  avgval = 0;
+  for (int i = 2; i < 32; i++) avgval += ph_buffer[i];
+  avgval = avgval / 30;
+  ph = (avgval - 5287.2) / -297.54;
+
+  // === SENSOR TDS ===
+  int tds_buffer[10];
+  for (int i = 0; i < 10; i++) {
+    tds_buffer[i] = analogRead(TdsSensorPin);
+    delay(5);
+  }
+  for (int i = 0; i < 9; i++) {
+    for (int j = i + 1; j < 10; j++) {
+      if (tds_buffer[i] > tds_buffer[j]) {
+        temp = tds_buffer[i];
+        tds_buffer[i] = tds_buffer[j];
+        tds_buffer[j] = temp;
+      }
+    }
+  }
+  avgval = 0;
+  for (int i = 2; i < 8; i++) avgval += tds_buffer[i];
+  avgval = avgval / 6;
+  voltage = avgval * (VREF / ADC_RES);
+  tds = (avgval - 1056.5) / 1.5113;
+
+  // ==== LOGIKA RELAY (AUTO MODE) ====
+  if (modeControl == 0) {  
+    if (jarak < 10.0) {     
+      relayState = LOW;
+      Serial.println("Relay ON (Auto)");
+    } else {
+      relayState = HIGH;
+      Serial.println("Relay OFF (Auto)");
+    }
+  }
+  digitalWrite(RELAY, relayState);
+
+  // ==== TAMPILKAN DI SERIAL MONITOR ====
+  Serial.println("=====================================");
+  Serial.print("Suhu       : "); Serial.print(suhu); Serial.println(" °C");
+  Serial.print("Kelembapan : "); Serial.print(kelembapan); Serial.println(" %");
+  Serial.print("Jarak      : "); Serial.print(jarak); Serial.println(" cm");
+  Serial.print("pH         : "); Serial.println(ph, 2);
+  Serial.print("TDS        : "); Serial.print(tds, 1); Serial.println(" ppm");
+  Serial.print("Relay      : "); Serial.println(relayState == LOW ? "ON" : "OFF");
+  Serial.println("=====================================\n");
+
+  // ==== KIRIM DATA KE BLYNK ====
+  Blynk.virtualWrite(V1, suhu);
+  Blynk.virtualWrite(V2, kelembapan);
+  Blynk.virtualWrite(V3, jarak);
+  Blynk.virtualWrite(V7, ph);
+  Blynk.virtualWrite(V8, tds);
+  Blynk.virtualWrite(V6, relayState == LOW ? 1 : 0);  // LED status relay
+
+  delay(2000);
+}
+
+// ==================== KONTROL DARI BLYNK ====================
+BLYNK_WRITE(V5) {  // Tombol manual ON/OFF relay
+  if (modeControl == 1) {
+    int tombol = param.asInt();
+    relayState = (tombol == 1) ? LOW : HIGH;
+    digitalWrite(RELAY, relayState);
+    Serial.println(tombol == 1 ? "Relay ON (Manual)" : "Relay OFF (Manual)");
+  }
+}
+
+BLYNK_WRITE(V4) {  // Selector mode Auto/Manual
+  modeControl = param.asInt();
+  Serial.println(modeControl == 0 ? "Mode: AUTO" : "Mode: MANUAL");
+}
