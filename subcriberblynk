@@ -1,0 +1,77 @@
+#define BLYNK_TEMPLATE_ID "TMPL6DgpTm2Qu"
+#define BLYNK_TEMPLATE_NAME "Relay5"
+#define BLYNK_AUTH_TOKEN "exwCVUfqWJK1BUztrYQ_8lEfZGcYaYUo"  // Token SUBSCRIBER
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <BlynkSimpleEsp32.h>
+
+// =============== KONFIGURASI WIFI ===============
+char ssid[] = "";
+char pass[] = "raan";
+
+// =============== TOKEN PUBLISHER ===============
+const char* publisherToken = "rqWJzL0LKsAWrYTGDYSXK9ETiKjINChG"; // Token PUBLISHER
+
+BlynkTimer timer;
+
+// =============== SETUP ===============
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, pass);
+  Serial.print("Menghubungkan WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Tersambung!");
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  Serial.println("Blynk Tersambung!");
+  
+  // Jalankan pengambilan data tiap 5 detik
+  timer.setInterval(5000L, ambilDataPublisher);
+}
+
+// =============== LOOP ===============
+void loop() {
+  Blynk.run();
+  timer.run();
+}
+
+// =============== FUNGSI AMBIL DATA DARI PUBLISHER ===============
+void ambilDataPublisher() {
+  if (WiFi.status() == WL_CONNECTED) {
+    ambilSatuData("V1", "🔥 Suhu (°C): ");
+    ambilSatuData("V2", "💧 Kelembapan (%): ");
+    ambilSatuData("V3", "📏 Jarak (cm): ");
+    ambilSatuData("V7", "🧪 pH: ");
+    ambilSatuData("V8", "💦 TDS (ppm): ");
+    ambilSatuData("V6", "⚙️ Relay: ");
+  } else {
+    Serial.println("⚠️ WiFi tidak tersambung!");
+  }
+}
+
+void ambilSatuData(String vpin, String label) {
+  HTTPClient http;
+  String url = "https://blynk.cloud/external/api/get?token=" + String(publisherToken) + "&" + vpin;
+  
+  http.begin(url);
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String payload = http.getString();
+    Serial.print(label);
+    Serial.println(payload);
+    // kalau mau kirim lagi ke Blynk subscriber dashboard:
+    if(vpin == "V1") Blynk.virtualWrite(V1, payload.toFloat());
+    if(vpin == "V2") Blynk.virtualWrite(V2, payload.toFloat());
+    if(vpin == "V3") Blynk.virtualWrite(V3, payload.toFloat());
+    if(vpin == "V7") Blynk.virtualWrite(V7, payload.toFloat());
+    if(vpin == "V8") Blynk.virtualWrite(V8, payload.toFloat());
+    if(vpin == "V6") Blynk.virtualWrite(V6, payload.toInt());
+  } else {
+    Serial.print("❌ Gagal ambil data ");
+    Serial.println(vpin);
+  }
+  http.end();
+}
