@@ -1,3 +1,25 @@
+/*
+Penjelasan Alur Otomatisasi
+Sensor	Parameter	Kondisi	Relay Aktif
+TDS	< 500 ppm	Air terlalu encer	Pompa Nutrisi (Relay 1)
+TDS	> 1200 ppm	Terlalu pekat	Pompa OFF
+pH	< 6.0 atau > 7.5	Tidak ideal	Pompa Penetral (Relay 2)
+pH	6.0–7.5	Ideal	Pompa OFF
+
+⚙️ Pin ESP32
+Komponen	Pin	Keterangan
+DS18B20	GPIO 4	Sensor suhu air
+Sensor pH	GPIO 34	Input analog
+Sensor TDS	GPIO 35	Input analog
+Relay 1	GPIO 25	Pompa Nutrisi
+Relay 2	GPIO 26	Pompa Penetral
+LCD I2C	SDA 21, SCL 22	Tampilan data
+*/
+
+
+
+
+
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <OneWire.h>
